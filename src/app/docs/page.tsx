@@ -1,131 +1,19 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-
-interface DocFile {
-  name: string;
-  exists: boolean;
-  size: number | null;
-  path: string;
-}
-
-interface DocLevel {
-  level: 'global' | 'workspace' | 'project';
-  label: string;
-  dirPath: string;
-  id?: string;
-  group_name?: string;
-  files: DocFile[];
-}
-
-interface EditorState {
-  filePath: string;
-  fileName: string;
-  levelLabel: string;
-  content: string;
-  original: string;
-  isNew: boolean;
-}
-
-const LEVEL_META = {
-  global: { icon: '🌐', desc: '모든 Claude Code 세션에 적용' },
-  workspace: { icon: '📁', desc: '하위 모든 프로젝트에 적용' },
-  project: { icon: '📦', desc: '해당 프로젝트에만 적용' },
-} as const;
+import { useDocs, LEVEL_META } from '@/hooks/useDocs';
+import { DocEditor } from '@/components/docs/DocEditor';
+import type { DocFile, DocLevel } from '@/hooks/useDocs';
 
 export default function DocsPage() {
-  const [levels, setLevels] = useState<DocLevel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editor, setEditor] = useState<EditorState | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ file: DocFile; label: string } | null>(null);
-
-  const fetchDocs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/docs');
-      if (res.ok) setLevels(await res.json());
-    } catch { /* */ }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchDocs(); }, [fetchDocs]);
-
-  const handleOpen = async (file: DocFile, label: string) => {
-    const res = await fetch('/api/docs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: file.path }),
-    });
-    if (res.ok) {
-      const { content, isNew } = await res.json();
-      setEditor({
-        filePath: file.path,
-        fileName: file.name,
-        levelLabel: label,
-        content,
-        original: content,
-        isNew,
-      });
-    }
-  };
-
-  const handleSave = async () => {
-    if (!editor) return;
-    setSaving(true);
-    try {
-      const res = await fetch('/api/docs', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: editor.filePath, content: editor.content }),
-      });
-      if (res.ok) {
-        setEditor({ ...editor, original: editor.content, isNew: false });
-        showToast('저장됨');
-        fetchDocs();
-      }
-    } catch { /* */ }
-    finally { setSaving(false); }
-  };
-
-  const handleDelete = async (file: DocFile) => {
-    try {
-      const res = await fetch('/api/docs', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: file.path }),
-      });
-      if (res.ok) {
-        showToast('삭제됨');
-        fetchDocs();
-        setDeleteConfirm(null);
-      }
-    } catch { /* */ }
-  };
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 1500);
-  };
-
-  const hasChanges = editor ? editor.content !== editor.original : false;
-
-  // 데이터 분류
-  const globalLevel = levels.find(l => l.level === 'global');
-  const workspaceLevels = levels.filter(l => l.level === 'workspace');
-  const projectLevels = levels.filter(l => l.level === 'project');
-
-  // 프로젝트를 워크스페이스별로 묶기
-  const projectsByWorkspace = new Map<string, DocLevel[]>();
-  for (const ws of workspaceLevels) {
-    projectsByWorkspace.set(ws.label, []);
-  }
-  for (const proj of projectLevels) {
-    const ws = workspaceLevels.find(w => proj.dirPath.startsWith(w.dirPath));
-    const key = ws?.label || '기타';
-    if (!projectsByWorkspace.has(key)) projectsByWorkspace.set(key, []);
-    projectsByWorkspace.get(key)!.push(proj);
-  }
+  const {
+    loading, editor, saving, toast,
+    deleteConfirm, setDeleteConfirm,
+    handleOpen, handleSave, handleDelete,
+    updateContent, revertContent, closeEditor,
+    hasChanges,
+    globalLevel, workspaceLevels,
+    projectsByWorkspace, totalFiles,
+  } = useDocs();
 
   if (loading) {
     return (
@@ -136,74 +24,19 @@ export default function DocsPage() {
     );
   }
 
-  // 에디터
   if (editor) {
     return (
-      <div className="p-6 max-w-5xl mx-auto flex flex-col h-[calc(100vh-48px)]">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                if (hasChanges && !confirm('저장하지 않은 변경사항이 있습니다. 나가시겠습니까?')) return;
-                setEditor(null);
-              }}
-              className="text-xs text-muted hover:text-foreground transition-colors"
-            >
-              ← 목록
-            </button>
-            <div>
-              <h1 className="text-lg font-bold">{editor.levelLabel}</h1>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs font-mono text-muted">{editor.fileName}</span>
-                {editor.isNew && (
-                  <span className="text-[10px] text-warning bg-warning/10 px-1.5 py-0.5 rounded">새 파일</span>
-                )}
-                {hasChanges && (
-                  <span className="text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded">수정됨</span>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-muted hidden sm:inline">
-              {editor.filePath.replace(/^\/Users\/[^/]+\//, '~/')}
-            </span>
-            <button
-              onClick={() => setEditor({ ...editor, content: editor.original })}
-              disabled={!hasChanges}
-              className="text-xs px-3 py-1.5 bg-white/5 hover:bg-white/10 text-muted rounded transition-colors disabled:opacity-30"
-            >
-              되돌리기
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!hasChanges || saving}
-              className="text-xs px-3 py-1.5 bg-accent/20 hover:bg-accent/30 text-accent rounded transition-colors disabled:opacity-30"
-            >
-              {saving ? '저장 중...' : editor.isNew ? '생성' : '저장'}
-            </button>
-          </div>
-        </div>
-
-        <textarea
-          value={editor.content}
-          onChange={e => setEditor({ ...editor, content: e.target.value })}
-          placeholder={`# ${editor.fileName}\n\n프로젝트 지침을 작성하세요.`}
-          spellCheck={false}
-          className="flex-1 w-full bg-card border border-border rounded-lg p-4 text-sm font-mono text-foreground resize-none focus:outline-none focus:border-accent/50 placeholder:text-muted/40"
-          onKeyDown={e => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-              e.preventDefault();
-              if (hasChanges) handleSave();
-            }
-          }}
-        />
-      </div>
+      <DocEditor
+        editor={editor}
+        hasChanges={hasChanges}
+        saving={saving}
+        onContentChange={updateContent}
+        onSave={handleSave}
+        onRevert={revertContent}
+        onClose={closeEditor}
+      />
     );
   }
-
-  // 목록
-  const totalFiles = levels.reduce((sum, l) => sum + l.files.filter(f => f.exists).length, 0);
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -215,7 +48,6 @@ export default function DocsPage() {
       </div>
 
       <div className="space-y-4">
-        {/* 전역 */}
         {globalLevel && (
           <LevelSection
             icon={LEVEL_META.global.icon}
@@ -228,12 +60,10 @@ export default function DocsPage() {
           />
         )}
 
-        {/* 워크스페이스 + 하위 프로젝트 */}
         {workspaceLevels.map(ws => {
           const projects = projectsByWorkspace.get(ws.label) || [];
           return (
             <section key={ws.dirPath} className="bg-card border border-border rounded-lg overflow-hidden">
-              {/* 워크스페이스 헤더 */}
               <div className="px-4 py-3 border-b border-border">
                 <div className="flex items-center gap-2">
                   <span className="text-xs">{LEVEL_META.workspace.icon}</span>
@@ -244,7 +74,6 @@ export default function DocsPage() {
                 </div>
               </div>
 
-              {/* 워크스페이스 루트 파일 */}
               <div className="border-b border-border/50 bg-white/[0.01]">
                 <DocRow
                   label={`${ws.label} (루트)`}
@@ -256,7 +85,6 @@ export default function DocsPage() {
                 />
               </div>
 
-              {/* 프로젝트들 */}
               {projects.length > 0 && (
                 <div className="divide-y divide-border/30">
                   {projects.map(proj => (
@@ -277,7 +105,6 @@ export default function DocsPage() {
         })}
       </div>
 
-      {/* 삭제 확인 */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-card border border-border rounded-lg p-6 max-w-sm mx-4">
