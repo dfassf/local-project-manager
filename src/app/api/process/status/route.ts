@@ -3,7 +3,7 @@ import { detectRunningProcesses } from '@/lib/process-manager';
 
 export async function GET() {
   try {
-    const processes = detectRunningProcesses();
+    const processes = await detectRunningProcesses();
     return NextResponse.json(processes);
   } catch (error) {
     return NextResponse.json(

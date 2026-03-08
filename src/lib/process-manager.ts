@@ -1,6 +1,9 @@
-import { execSync, spawn, ChildProcess } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
+import { promisify } from 'util';
 import { getDb } from './db';
 import type { RunningProcess } from '@/types';
+
+const execAsync = promisify(exec);
 
 const ALLOWED_COMMANDS = /^(npm|pnpm|yarn|npx|node|ts-node|tsx|python|bun)/;
 const SYSTEM_COMMANDS = new Set(['rapportd', 'ControlCe', 'SystemUIS', 'Dropbox', 'Google', 'com.apple', 'mDNSRespo', 'loginwindo']);
@@ -36,11 +39,11 @@ function ensureManagedStateRestored() {
   } catch { /* ignore */ }
 }
 
-export function detectRunningProcesses(): RunningProcess[] {
+export async function detectRunningProcesses(): Promise<RunningProcess[]> {
   ensureManagedStateRestored();
 
   try {
-    const output = execSync(
+    const { stdout: output } = await execAsync(
       'lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null',
       { encoding: 'utf-8', timeout: 5000 }
     );
@@ -54,6 +57,8 @@ export function detectRunningProcesses(): RunningProcess[] {
       id: string; name: string; path: string;
     }>;
 
+    // 각 PID의 cwd를 병렬로 조회
+    const pidEntries: { pid: number; port: number; command: string }[] = [];
     for (const line of lines) {
       const parts = line.split(/\s+/);
       const command = parts[0];
@@ -66,54 +71,48 @@ export function detectRunningProcesses(): RunningProcess[] {
       // 시스템 포트, 서비스 포트, 시스템 프로세스 제외
       if (port < 1024 || [5432, 27017, 6379, 3306, 9200].includes(port)) continue;
       if (SYSTEM_COMMANDS.has(command)) continue;
-
       if (seen.has(pid)) continue;
 
-      // PID의 작업 디렉토리 확인 (macOS lsof 출력 파싱)
-      // lsof -p PID -Fn 출력 형태:
-      //   pPID
-      //   fcwd
-      //   n/actual/cwd/path
-      //   ftxt
-      //   ...
-      let cwd = '';
-      try {
-        const lsofOutput = execSync(`lsof -p ${pid} -Fn 2>/dev/null`, {
+      seen.set(pid, { pid, port, command, cwd: '', project_id: null, project_name: null, is_managed: false });
+      pidEntries.push({ pid, port, command });
+    }
+
+    // 각 PID의 cwd를 병렬 조회
+    const cwdResults = await Promise.allSettled(
+      pidEntries.map(async ({ pid }) => {
+        const { stdout } = await execAsync(`lsof -p ${pid} -Fn 2>/dev/null`, {
           encoding: 'utf-8',
           timeout: 3000,
         });
-        const lsofLines = lsofOutput.split('\n');
+        const lsofLines = stdout.split('\n');
         for (let i = 0; i < lsofLines.length; i++) {
           if (lsofLines[i] === 'fcwd' && lsofLines[i + 1]?.startsWith('n/')) {
-            cwd = lsofLines[i + 1].slice(1); // 'n' 접두사 제거
-            break;
+            return { pid, cwd: lsofLines[i + 1].slice(1) };
           }
         }
-      } catch { /* ignore */ }
+        return { pid, cwd: '' };
+      })
+    );
+
+    for (const result of cwdResults) {
+      if (result.status !== 'fulfilled') continue;
+      const { pid, cwd } = result.value;
+      const entry = seen.get(pid);
+      if (!entry) continue;
+
+      entry.cwd = cwd;
 
       // 프로젝트 매핑
-      let projectId: string | null = null;
-      let projectName: string | null = null;
       for (const p of projects) {
         if (cwd && cwd.startsWith(p.path)) {
-          projectId = p.id;
-          projectName = p.name;
+          entry.project_id = p.id;
+          entry.project_name = p.name;
           break;
         }
       }
 
       // 대시보드에서 시작한 프로세스인지 확인 (메모리 + DB 복원)
-      const isManaged = managedProcesses.has(pid) || restoredManagedPids.has(pid);
-
-      seen.set(pid, {
-        pid,
-        port,
-        command,
-        cwd,
-        project_id: projectId,
-        project_name: projectName,
-        is_managed: isManaged,
-      });
+      entry.is_managed = managedProcesses.has(pid) || restoredManagedPids.has(pid);
     }
 
     return Array.from(seen.values());
@@ -122,7 +121,7 @@ export function detectRunningProcesses(): RunningProcess[] {
   }
 }
 
-export function startProcess(configId: number): { pid: number; port: number | null } {
+export async function startProcess(configId: number): Promise<{ pid: number; port: number | null }> {
   const db = getDb();
   const config = db.prepare(`
     SELECT pc.*, p.path as project_path
@@ -145,7 +144,7 @@ export function startProcess(configId: number): { pid: number; port: number | nu
 
   // 포트 충돌 확인
   if (config.port) {
-    const running = detectRunningProcesses();
+    const running = await detectRunningProcesses();
     const conflict = running.find(p => p.port === config.port);
     if (conflict) {
       throw new Error(`포트 ${config.port}이 이미 사용 중입니다 (PID: ${conflict.pid})`);

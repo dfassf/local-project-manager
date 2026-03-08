@@ -8,7 +8,7 @@ export async function GET() {
   try {
     const db = getDb();
     const projects = db.prepare('SELECT * FROM projects ORDER BY group_name, name').all() as Project[];
-    const runningProcesses = detectRunningProcesses();
+    const runningProcesses = await detectRunningProcesses();
 
     const projectsWithStatus: ProjectWithStatus[] = projects.map(project => {
       const stats = getProjectStats(project.path);

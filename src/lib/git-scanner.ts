@@ -1,4 +1,5 @@
 import { readdirSync, existsSync, statSync } from 'fs';
+import { execSync } from 'child_process';
 import path from 'path';
 import { getDb } from './db';
 import { detectProjectType } from './project-detector';
@@ -143,7 +144,6 @@ export function getProjectStats(projectPath: string): {
   }
 
   try {
-    const { execSync } = require('child_process');
     const log = execSync(
       'git log -1 --format="%ai|||%s" 2>/dev/null',
       { cwd: projectPath, encoding: 'utf-8', timeout: 5000 }

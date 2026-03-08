@@ -27,7 +27,7 @@ export async function GET(
     const aiSummaries = getCachedSummaries(id);
     const claudeSessions = db.prepare('SELECT * FROM claude_sessions WHERE project_id = ? ORDER BY last_activity DESC').all(id) as ClaudeSession[];
 
-    const runningProcesses = detectRunningProcesses();
+    const runningProcesses = await detectRunningProcesses();
     const processStatus = runningProcesses.find(p => p.project_id === id) || null;
 
     return NextResponse.json({

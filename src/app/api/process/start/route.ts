@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'configId가 필요합니다' }, { status: 400 });
     }
 
-    const result = startProcess(configId);
+    const result = await startProcess(configId);
     return NextResponse.json({
       message: '프로세스가 시작되었습니다',
       pid: result.pid,
