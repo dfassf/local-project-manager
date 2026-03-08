@@ -3,11 +3,42 @@ import { getDb } from './db';
 import type { RunningProcess } from '@/types';
 
 const ALLOWED_COMMANDS = /^(npm|pnpm|yarn|npx|node|ts-node|tsx|python|bun)/;
+const SYSTEM_COMMANDS = new Set(['rapportd', 'ControlCe', 'SystemUIS', 'Dropbox', 'Google', 'com.apple', 'mDNSRespo', 'loginwindo']);
 
 // 대시보드에서 시작한 프로세스 추적 (메모리)
 const managedProcesses = new Map<number, ChildProcess>();
+// 서버 재시작 후 DB에서 복원된 managed PID
+const restoredManagedPids = new Set<number>();
+let managedStateRestored = false;
+
+function ensureManagedStateRestored() {
+  if (managedStateRestored) return;
+  managedStateRestored = true;
+
+  try {
+    const db = getDb();
+    const logs = db.prepare(
+      'SELECT pid FROM process_logs WHERE stopped_at IS NULL'
+    ).all() as { pid: number }[];
+
+    for (const log of logs) {
+      try {
+        process.kill(log.pid, 0); // 생존 확인
+        restoredManagedPids.add(log.pid);
+      } catch {
+        // 프로세스가 이미 죽었으면 DB 정리
+        db.prepare(
+          `UPDATE process_logs SET stopped_at = CURRENT_TIMESTAMP, stop_reason = 'crashed'
+           WHERE pid = ? AND stopped_at IS NULL`
+        ).run(log.pid);
+      }
+    }
+  } catch { /* ignore */ }
+}
 
 export function detectRunningProcesses(): RunningProcess[] {
+  ensureManagedStateRestored();
+
   try {
     const output = execSync(
       'lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null',
@@ -32,8 +63,9 @@ export function detectRunningProcesses(): RunningProcess[] {
 
       const port = parseInt(portMatch[1]);
 
-      // 시스템 포트나 잘 알려진 서비스 포트 제외
+      // 시스템 포트, 서비스 포트, 시스템 프로세스 제외
       if (port < 1024 || [5432, 27017, 6379, 3306, 9200].includes(port)) continue;
+      if (SYSTEM_COMMANDS.has(command)) continue;
 
       if (seen.has(pid)) continue;
 
@@ -70,8 +102,8 @@ export function detectRunningProcesses(): RunningProcess[] {
         }
       }
 
-      // 대시보드에서 시작한 프로세스인지 확인
-      const isManaged = managedProcesses.has(pid);
+      // 대시보드에서 시작한 프로세스인지 확인 (메모리 + DB 복원)
+      const isManaged = managedProcesses.has(pid) || restoredManagedPids.has(pid);
 
       seen.set(pid, {
         pid,
@@ -143,27 +175,23 @@ export function startProcess(configId: number): { pid: number; port: number | nu
 }
 
 export function stopProcess(pid: number): void {
-  // 안전 검사: managed process인지 확인
-  const isManaged = managedProcesses.has(pid);
-  if (!isManaged) {
-    throw new Error(`관리 대상이 아닌 프로세스입니다: ${pid}. 대시보드에서 시작한 프로세스만 중지할 수 있습니다.`);
-  }
+  const isManaged = managedProcesses.has(pid) || restoredManagedPids.has(pid);
 
   try {
-    // SIGTERM으로 우아하게 종료
     process.kill(pid, 'SIGTERM');
 
-    // 5초 후에도 살아있으면 SIGKILL
-    setTimeout(() => {
-      try {
-        process.kill(pid, 0); // 생존 확인
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // 이미 종료됨
-      }
-    }, 5000);
+    // managed 프로세스는 5초 후에도 살아있으면 SIGKILL
+    if (isManaged) {
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0);
+          process.kill(pid, 'SIGKILL');
+        } catch { /* 이미 종료됨 */ }
+      }, 5000);
+    }
 
     managedProcesses.delete(pid);
+    restoredManagedPids.delete(pid);
 
     // DB 업데이트
     const db = getDb();
@@ -174,6 +202,7 @@ export function stopProcess(pid: number): void {
     `).run(pid);
   } catch (err) {
     managedProcesses.delete(pid);
+    restoredManagedPids.delete(pid);
     throw new Error(`프로세스 종료 실패: ${err}`);
   }
 }

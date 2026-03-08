@@ -1,6 +1,12 @@
 import Link from 'next/link';
 import type { RunningProcess } from '@/types';
 
+const DEV_COMMANDS = new Set(['node', 'npm', 'pnpm', 'yarn', 'npx', 'python', 'python3', 'bun', 'tsx', 'ts-node', 'ruby', 'java', 'go', 'deno', 'ngrok', 'docker', 'uvicorn', 'gunicorn']);
+
+function isDevProcess(command: string): boolean {
+  return DEV_COMMANDS.has(command.toLowerCase());
+}
+
 type Props = {
   processes: RunningProcess[];
   externalProcesses: RunningProcess[];
@@ -14,7 +20,9 @@ export function RunningTable({ processes, externalProcesses, actionLoading, onSt
   return (
     <section className="bg-card border border-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
-        <h2 className="text-sm font-semibold">실행 중 ({total})</h2>
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+          기타 프로세스 <span className="normal-case tracking-normal">({total})</span>
+        </h2>
       </div>
       {total === 0 ? (
         <div className="p-8 text-center text-muted text-sm">
@@ -49,18 +57,21 @@ export function RunningTable({ processes, externalProcesses, actionLoading, onSt
                   </span>
                 </td>
                 <td className="px-4 py-3 text-xs font-mono text-muted">{proc.pid}</td>
-                <td className="px-4 py-3 text-right">
-                  {proc.is_managed ? (
-                    <button
-                      onClick={() => onStop(proc.pid)}
-                      disabled={actionLoading === `stop-${proc.pid}`}
-                      className="text-xs px-2 py-1 bg-danger/10 hover:bg-danger/20 text-danger rounded transition-colors disabled:opacity-50"
-                    >
-                      {actionLoading === `stop-${proc.pid}` ? '중지 중...' : '중지'}
-                    </button>
-                  ) : (
+                <td className="px-4 py-3 text-right flex items-center justify-end gap-1.5">
+                  {!proc.is_managed && (
                     <span className="text-[10px] text-muted bg-white/5 px-1.5 py-0.5 rounded">외부</span>
                   )}
+                  <button
+                    onClick={() => onStop(proc.pid)}
+                    disabled={actionLoading === `stop-${proc.pid}`}
+                    className={`text-xs px-2 py-1 rounded transition-colors disabled:opacity-50 ${
+                      proc.is_managed
+                        ? 'bg-danger/10 hover:bg-danger/20 text-danger'
+                        : 'bg-white/5 hover:bg-danger/10 text-muted hover:text-danger'
+                    }`}
+                  >
+                    {actionLoading === `stop-${proc.pid}` ? '중지 중...' : '중지'}
+                  </button>
                 </td>
               </tr>
             ))}
@@ -75,7 +86,17 @@ export function RunningTable({ processes, externalProcesses, actionLoading, onSt
                 </td>
                 <td className="px-4 py-3 text-xs font-mono text-muted">{proc.pid}</td>
                 <td className="px-4 py-3 text-right">
-                  <span className="text-[10px] text-muted bg-white/5 px-1.5 py-0.5 rounded">외부</span>
+                  {isDevProcess(proc.command) ? (
+                    <button
+                      onClick={() => onStop(proc.pid)}
+                      disabled={actionLoading === `stop-${proc.pid}`}
+                      className="text-xs px-2 py-1 bg-danger/10 hover:bg-danger/20 text-danger rounded transition-colors disabled:opacity-50"
+                    >
+                      {actionLoading === `stop-${proc.pid}` ? '중지 중...' : '중지'}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-muted bg-white/5 px-1.5 py-0.5 rounded">시스템</span>
+                  )}
                 </td>
               </tr>
             ))}

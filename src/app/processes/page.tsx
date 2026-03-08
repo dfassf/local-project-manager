@@ -2,47 +2,33 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { RunningProcess } from '@/types';
+import { ProcessGroup, type ProcessEntry } from '@/components/processes/ProcessGroup';
 import { RunningTable } from '@/components/processes/RunningTable';
-import { StoppedTable } from '@/components/processes/StoppedTable';
 
-interface ProjectInfo {
-  id: string;
-  name: string;
-  display_name: string | null;
-  dev_command: string | null;
-  dev_port: number | null;
-  path: string;
+interface ProcessConfig {
+  id: number;
+  project_id: string;
+  project_name: string;
+  command: string;
+  port: number | null;
+  group_name: string;
 }
 
 export default function ProcessesPage() {
   const [processes, setProcesses] = useState<RunningProcess[]>([]);
-  const [configs, setConfigs] = useState<{ id: number; project_id: string; project_name: string; command: string; port: number | null }[]>([]);
+  const [configs, setConfigs] = useState<ProcessConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const [procRes, projRes] = await Promise.all([
+      const [procRes, configRes] = await Promise.all([
         fetch('/api/process/status'),
-        fetch('/api/projects'),
+        fetch('/api/process/configs'),
       ]);
 
       if (procRes.ok) setProcesses(await procRes.json());
-
-      if (projRes.ok) {
-        const projects: ProjectInfo[] = await projRes.json();
-        setConfigs(
-          projects
-            .filter(p => p.dev_command)
-            .map(p => ({
-              id: 0,
-              project_id: p.id,
-              project_name: p.display_name || p.name,
-              command: p.dev_command!,
-              port: p.dev_port,
-            }))
-        );
-      }
+      if (configRes.ok) setConfigs(await configRes.json());
     } catch {
       // ignore
     } finally {
@@ -88,17 +74,53 @@ export default function ProcessesPage() {
     }
   };
 
-  const runningWithProject = processes.filter(p => p.project_id);
-  const runningExternal = processes.filter(p => !p.project_id);
-  const runningProjectIds = new Set(processes.map(p => p.project_id));
-  const stoppedConfigs = configs.filter(c => !runningProjectIds.has(c.project_id));
+  // 프로세스 → project_id 매핑
+  const runningByProject = new Map<string, RunningProcess>();
+  for (const proc of processes) {
+    if (proc.project_id) runningByProject.set(proc.project_id, proc);
+  }
+
+  // configs를 group별로 분류 + 실행 상태 병합
+  const grouped = new Map<string, ProcessEntry[]>();
+  for (const config of configs) {
+    const group = config.group_name;
+    if (!grouped.has(group)) grouped.set(group, []);
+
+    const running = runningByProject.get(config.project_id);
+    grouped.get(group)!.push({
+      config_id: config.id,
+      project_id: config.project_id,
+      project_name: config.project_name,
+      command: config.command,
+      port: config.port,
+      running: running ? {
+        pid: running.pid,
+        port: running.port,
+        command: running.command,
+        is_managed: running.is_managed,
+      } : undefined,
+    });
+  }
+
+  // 각 그룹 내에서 실행중인 것을 위로
+  for (const entries of grouped.values()) {
+    entries.sort((a, b) => {
+      if (a.running && !b.running) return -1;
+      if (!a.running && b.running) return 1;
+      return 0;
+    });
+  }
+
+  // 외부 프로세스 (프로젝트 미매핑)
+  const externalProcesses = processes.filter(p => !p.project_id);
+  const runningCount = processes.filter(p => p.project_id).length;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold">프로세스 관리</h1>
         <p className="text-sm text-muted mt-1">
-          실행 중인 dev 서버를 관리합니다 · {processes.length}개 감지됨
+          {configs.length}개 프로젝트 · {runningCount}개 실행 중
         </p>
       </div>
 
@@ -107,18 +129,26 @@ export default function ProcessesPage() {
           불러오는 중...
         </div>
       ) : (
-        <div className="space-y-6">
-          <RunningTable
-            processes={runningWithProject}
-            externalProcesses={runningExternal}
-            actionLoading={actionLoading}
-            onStop={handleStop}
-          />
-          <StoppedTable
-            configs={stoppedConfigs}
-            actionLoading={actionLoading}
-            onStart={handleStart}
-          />
+        <div className="space-y-4">
+          {[...grouped.entries()].map(([group, entries]) => (
+            <ProcessGroup
+              key={group}
+              group={group}
+              entries={entries}
+              actionLoading={actionLoading}
+              onStart={handleStart}
+              onStop={handleStop}
+            />
+          ))}
+
+          {externalProcesses.length > 0 && (
+            <RunningTable
+              processes={[]}
+              externalProcesses={externalProcesses}
+              actionLoading={actionLoading}
+              onStop={handleStop}
+            />
+          )}
         </div>
       )}
     </div>

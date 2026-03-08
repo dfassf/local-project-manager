@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const NAV_ITEMS = [
   { href: '/', label: '대시보드', icon: '◆' },
   { href: '/processes', label: '프로세스', icon: '▶' },
+  { href: '/docs', label: 'AI 설정', icon: '📄' },
   { href: '/secrets', label: '키 관리', icon: '🔑' },
   { href: '/settings', label: '설정', icon: '⚙' },
 ];

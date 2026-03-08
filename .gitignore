@@ -27,6 +27,9 @@
 # secrets (API keys, PEM files, credentials)
 .secrets/
 
+# local database
+/data/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
