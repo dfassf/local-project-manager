@@ -330,9 +330,8 @@ describe('startProcess', () => {
 
     const result = await startProcess(1);
     expect(result).toEqual({ pid: 5678, port: 3000 });
-    expect(mockSpawn).toHaveBeenCalledWith('pnpm dev', [], expect.objectContaining({
+    expect(mockSpawn).toHaveBeenCalledWith('pnpm', ['dev'], expect.objectContaining({
       cwd: '/Users/test/project',
-      shell: true,
       detached: true,
     }));
     expect(mockRun).toHaveBeenCalledWith(1, 5678);

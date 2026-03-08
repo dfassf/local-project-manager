@@ -151,9 +151,9 @@ export async function startProcess(configId: number): Promise<{ pid: number; por
     }
   }
 
-  const child = spawn(config.command, [], {
+  const [cmd, ...args] = config.command.split(/\s+/);
+  const child = spawn(cmd, args, {
     cwd: config.cwd,
-    shell: true,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
